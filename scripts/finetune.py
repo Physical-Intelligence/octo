@@ -205,10 +205,6 @@ def main(_):
             )
             del FLAGS.config.dataset_kwargs["oxe_kwargs"]
 
-        # cut dataset to one for debugging 
-        FLAGS.config.dataset_kwargs["dataset_kwargs_list"] = FLAGS.config.dataset_kwargs["dataset_kwargs_list"][:2]
-        FLAGS.config.dataset_kwargs["sample_weights"] = FLAGS.config.dataset_kwargs["sample_weights"][:2]
-
         # Add the finetuning dataset to the oxe mix and adjiust oxe  weights
         # TODO maybe resolve 'action_proprio_normalization_type' and 'standardize_fn'
         FLAGS.config.dataset_kwargs["dataset_kwargs_list"].append(FLAGS.config.dataset_kwargs["cofinetuning_kwargs"])
