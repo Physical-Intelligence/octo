@@ -14,7 +14,8 @@ import tensorflow as tf
 import tqdm
 import wandb
 
-from octo.data.dataset import make_single_dataset
+from octo.data.dataset import make_single_dataset, make_interleaved_dataset
+from octo.data.oxe import make_oxe_dataset_kwargs_and_weights
 from octo.model.octo_model import OctoModel
 from octo.utils.jax_utils import initialize_compilation_cache
 from octo.utils.spec import ModuleSpec
@@ -28,6 +29,7 @@ from octo.utils.train_utils import (
     check_config_diff,
     create_optimizer,
     format_name_with_config,
+    filter_eval_datasets,
     merge_params,
     process_text,
     Timer,
@@ -60,13 +62,14 @@ config_flags.DEFINE_config_file(
 def main(_):
     initialize_compilation_cache()
     devices = jax.devices()
+    is_cofinetuning = "cofinetuning_kwargs" in FLAGS.config.dataset_kwargs
     logging.info(
         f"""
         Octo Finetuning Script
         ======================
         Pretrained model: {FLAGS.config.pretrained_path}
-        Finetuning Dataset: {FLAGS.config.dataset_kwargs.name}
-        Data dir: {FLAGS.config.dataset_kwargs.data_dir}
+        Finetuning Dataset: {FLAGS.config.dataset_kwargs.name if not is_cofinetuning else f"cofinetuning on {FLAGS.config.dataset_kwargs.cofinetuning_kwargs.name} with oxe"}
+        Data dir: {FLAGS.config.dataset_kwargs.data_dir if not is_cofinetuning else f"cofinetuning on {FLAGS.config.dataset_kwargs.cofinetuning_kwargs.data_dir} with oxe"}
         Task Modality: {FLAGS.config.modality}
         Finetuning Mode: {FLAGS.config.finetuning_mode}
 
@@ -173,20 +176,72 @@ def main(_):
         del FLAGS.config["dataset_kwargs"]["standardize_fn"]
         FLAGS.config["dataset_kwargs"]["standardize_fn"] = standardize_fn
 
-    dataset = make_single_dataset(
-        FLAGS.config.dataset_kwargs,
-        traj_transform_kwargs=FLAGS.config.traj_transform_kwargs,
-        frame_transform_kwargs=FLAGS.config.frame_transform_kwargs,
-        train=True,
-    )
-    train_data_iter = (
-        dataset.repeat()
-        .unbatch()
-        .shuffle(FLAGS.config.shuffle_buffer_size)
-        .batch(FLAGS.config.batch_size)
-        .iterator()
-    )
-    train_data_iter = map(process_batch, train_data_iter)
+    if is_cofinetuning:
+
+        # TODO come up with a cleaner solution for this
+        if (
+            standardize_fn := FLAGS.config["dataset_kwargs"]["cofinetuning_kwargs"].get("standardize_fn", None)
+        ) is not None:
+            path, name = standardize_fn.split(":")
+            # imp is deprecated, but it's also what ml_collections uses
+            standardize_fn = getattr(imp.load_source("standardize_fn", path), name)
+            del FLAGS.config["dataset_kwargs"]["cofinetuning_kwargs"]["standardize_fn"]
+            FLAGS.config["dataset_kwargs"]["cofinetuning_kwargs"]["standardize_fn"] = standardize_fn
+        
+        # Dataset loading copied from train.py
+        from jax.experimental import multihost_utils
+        def shard(batch):
+            return multihost_utils.host_local_array_to_global_array(
+                batch, mesh, PartitionSpec("batch")
+            )
+
+        if "oxe_kwargs" in FLAGS.config.dataset_kwargs:
+            # create dataset_kwargs_list from oxe_kwargs
+            (
+                FLAGS.config.dataset_kwargs["dataset_kwargs_list"],
+                FLAGS.config.dataset_kwargs["sample_weights"],
+            ) = make_oxe_dataset_kwargs_and_weights(
+                **FLAGS.config.dataset_kwargs["oxe_kwargs"]
+            )
+            del FLAGS.config.dataset_kwargs["oxe_kwargs"]
+
+        # cut dataset to one for debugging 
+        FLAGS.config.dataset_kwargs["dataset_kwargs_list"] = FLAGS.config.dataset_kwargs["dataset_kwargs_list"][:2]
+        FLAGS.config.dataset_kwargs["sample_weights"] = FLAGS.config.dataset_kwargs["sample_weights"][:2]
+
+        # Add the finetuning dataset to the oxe mix and adjiust oxe  weights
+        # TODO maybe resolve 'action_proprio_normalization_type' and 'standardize_fn'
+        FLAGS.config.dataset_kwargs["dataset_kwargs_list"].append(FLAGS.config.dataset_kwargs["cofinetuning_kwargs"])
+        oxe_weight = sum(FLAGS.config.dataset_kwargs["sample_weights"])
+        FLAGS.config.dataset_kwargs["sample_weights"].append(FLAGS.config.cofinetuning_split * oxe_weight / (1-FLAGS.config.cofinetuning_split))
+        del FLAGS.config.dataset_kwargs["cofinetuning_kwargs"]
+
+        dataset = make_interleaved_dataset(**FLAGS.config.dataset_kwargs, train=True)
+        train_data_iter = map(shard,
+            map(
+                process_batch,
+                dataset.iterator(prefetch=FLAGS.config.prefetch_num_batches),
+            ),
+        )
+    
+    else:
+
+        # Original single dataset finetuning
+        dataset = make_single_dataset(
+            FLAGS.config.dataset_kwargs,
+            traj_transform_kwargs=FLAGS.config.traj_transform_kwargs,
+            frame_transform_kwargs=FLAGS.config.frame_transform_kwargs,
+            train=True,
+        )
+        train_data_iter = (
+            dataset.repeat()
+            .unbatch()
+            .shuffle(FLAGS.config.shuffle_buffer_size)
+            .batch(FLAGS.config.batch_size)
+            .iterator()
+        )
+        train_data_iter = map(process_batch, train_data_iter)
+
     example_batch = next(train_data_iter)
 
     #########
@@ -332,14 +387,24 @@ def main(_):
     else:
         modes_to_evaluate = ["base"]
 
-    dataset_kwargs_list = [FLAGS.config.dataset_kwargs]
+    # TODO come up with a cleaner way to handle cofinetuning vs regular finetuning
+    if is_cofinetuning:
+        dataset_kwargs_list, _ = filter_eval_datasets(
+            FLAGS.config.dataset_kwargs["dataset_kwargs_list"],
+            FLAGS.config.dataset_kwargs["sample_weights"],
+            ("bridge_dataset",) # TODO add this to the config
+        )
+        dataset_kwargs = FLAGS.config.dataset_kwargs
+    else:
+        dataset_kwargs_list = [FLAGS.config.dataset_kwargs]
+        dataset_kwargs = FLAGS.config
 
     val_callback = ValidationCallback(
         loss_fn=loss_fn,
         process_batch_fn=process_batch,
         text_processor=text_processor,
         val_dataset_kwargs_list=dataset_kwargs_list,
-        dataset_kwargs=FLAGS.config,
+        dataset_kwargs=dataset_kwargs,
         modes_to_evaluate=modes_to_evaluate,
         **FLAGS.config.val_kwargs,
     )
@@ -347,7 +412,7 @@ def main(_):
     viz_callback = VisualizationCallback(
         text_processor=text_processor,
         val_dataset_kwargs_list=dataset_kwargs_list,
-        dataset_kwargs=FLAGS.config,
+        dataset_kwargs=dataset_kwargs,
         modes_to_evaluate=modes_to_evaluate,
         **FLAGS.config.viz_kwargs,
     )
