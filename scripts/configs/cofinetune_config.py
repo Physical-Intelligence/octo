@@ -121,7 +121,7 @@ def get_config(config_string="full,multimodal"):
         wandb=dict(
             project="octo_cofinetune", group=placeholder(str), entity=placeholder(str)
         ),
-        dataset_kwargs=get_dataset_config(traj_transform_kwargs, frame_transform_kwargs, shuffle_buffer_size=1000, batch_size=256*4),
+        dataset_kwargs=get_dataset_config(traj_transform_kwargs, frame_transform_kwargs, shuffle_buffer_size=1000, batch_size=256*2),
         cofinetuning_split=0.5, # probability of sampling from the finetuning set vs the pretraining set
         traj_transform_kwargs=traj_transform_kwargs,
         frame_transform_kwargs=frame_transform_kwargs,
