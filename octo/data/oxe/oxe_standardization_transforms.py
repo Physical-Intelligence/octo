@@ -24,6 +24,24 @@ from octo.data.utils.data_utils import (
 )
 
 
+def gello_ur_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+    # NOTE: this is not actually the official OXE copy of bridge, it is our own more up-to-date copy that you
+    # can find at https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/
+    # trajectory["action"] = tf.concat(
+    #     [
+    #         trajectory["action"][:, :6],
+    #         binarize_gripper_actions(trajectory["action"][:, -1])[:, None],
+    #     ],
+    #     axis=1,
+    # )
+    # trajectory = relabel_actions(trajectory)
+    # trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
+    # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][
+    #     :, -1:
+    # ]
+    return trajectory
+
+
 def bridge_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     # NOTE: this is not actually the official OXE copy of bridge, it is our own more up-to-date copy that you
     # can find at https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/

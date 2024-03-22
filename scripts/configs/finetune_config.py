@@ -14,18 +14,18 @@ def get_config(config_string="full,multimodal"):
     # and second image key should be the wrist view (None if not used)
 
     FINETUNING_KWARGS = {
-        "name": "bridge_dataset",
-        "data_dir": "./tests/debug_dataset",
-        "image_obs_keys": {"primary": "image_0", "wrist": None},
-        "state_obs_keys": ["state", None],
+        "name": "gello_ur_dataset_builder",
+        "data_dir": "/home/pi3/tensorflow_datasets/",
+        "image_obs_keys": {"primary": "base_image", "wrist": "wrist_image"},
+        "state_obs_keys": ["state", "state"],
         "language_key": "language_instruction",
         "action_proprio_normalization_type": "normal",
         # All actions are relative deltas, except for the last one (gripper) which is absolute
         # Specifying this is only necessary if you want to predict > 1 step into the future
-        "absolute_action_mask": [False, False, False, False, False, False, True],
+        "absolute_action_mask": [True, True, True, True, True, True, True],
         # standardize_fn is dynamically loaded from a file
         # for example: "experiments/kevin/custom_standardization_transforms.py:aloha_dataset_transform"
-        "standardize_fn": "octo/data/oxe/oxe_standardization_transforms.py:bridge_dataset_transform",
+        "standardize_fn": "octo/data/oxe/oxe_standardization_transforms.py:gello_ur_transform",
         # If the default data loading speed is too slow, try these:
         # "num_parallel_reads": 8,  # for reading from disk / GCS
         # "num_parallel_calls": 16,  # for initial dataset construction
@@ -53,7 +53,7 @@ def get_config(config_string="full,multimodal"):
         pretrained_path=placeholder(str),
         pretrained_step=placeholder(int),
         batch_size=256,
-        shuffle_buffer_size=10000,
+        shuffle_buffer_size=256,
         num_steps=max_steps,
         log_interval=100,
         eval_interval=5000,
@@ -82,7 +82,7 @@ def get_config(config_string="full,multimodal"):
             grad_accumulation_steps=None,  # if you are using grad accumulation, you need to adjust max_steps accordingly
         ),
         val_kwargs=dict(
-            val_shuffle_buffer_size=1000,
+            val_shuffle_buffer_size=256,
             num_val_batches=16,
         ),
         viz_kwargs=dict(
